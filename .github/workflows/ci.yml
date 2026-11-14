@@ -1,0 +1,108 @@
+name: Wardline Win-ARM64 CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  win-arm64-cross:
+    name: Windows ARM64 Cross-Compile Suite
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (aarch64-pc-windows-gnullvm)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-gnullvm
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python (Zig Linker Wrappers)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Build and Test Zig ARM64 Engine
+        shell: pwsh
+        run: |
+          zig build
+          zig build test
+
+      - name: Clippy Workspace (ARM64)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build ARM64 Release Binaries
+        run: cargo build --release --bins
+
+      - name: Verify ARM64 PE Machine Headers
+        shell: pwsh
+        run: |
+          function Get-PeMachine($path) {
+            $fs = [System.IO.File]::OpenRead((Resolve-Path $path))
+            try {
+              $br = New-Object System.IO.BinaryReader($fs)
+              $fs.Seek(0x3C, 'Begin') | Out-Null
+              $peOff = $br.ReadInt32()
+              $fs.Seek($peOff + 4, 'Begin') | Out-Null
+              return $br.ReadUInt16()
+            } finally {
+              $fs.Dispose()
+            }
+          }
+          foreach ($bin in @("wardline.exe", "wardline-guard.exe", "wardline-mcp.exe", "wardline-verify.exe")) {
+            $m = Get-PeMachine "target\aarch64-pc-windows-gnullvm\release\$bin"
+            if ($m -ne 0xAA64) { throw "$bin arm64 machine mismatch: 0x$($m.ToString('X4'))" }
+          }
+
+  win-arm64-native:
+    name: Native Windows on ARM64 Verification
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (aarch64-pc-windows-gnullvm)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-gnullvm
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python (Zig Linker Wrappers)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Build and Test Zig ARM64 Engine
+        shell: pwsh
+        run: |
+          zig build
+          zig build test
+
+      - name: Run Native ARM64 Tests
+        run: cargo test --workspace -- --test-threads=1
+
+      - name: Build ARM64 Release Binaries
+        run: cargo build --release --bins
+
+      - name: Verify ARM64 Doctor & Verifier CLI
+        shell: pwsh
+        run: |
+          .\target\aarch64-pc-windows-gnullvm\release\wardline.exe doctor --json
+          .\target\aarch64-pc-windows-gnullvm\release\wardline-verify.exe --help

@@ -1,0 +1,8 @@
+[build]
+target = "aarch64-pc-windows-gnullvm"
+
+[target.aarch64-pc-windows-gnullvm]
+linker = "tools\\wl-arm64-link.cmd"
+
+[env]
+CC_aarch64_pc_windows_gnullvm = { value = "tools\\wl-arm64-cc.cmd", relative = true }
