@@ -1,29 +1,45 @@
-# Contributing to Wardline (`win-arm64`)
+# Contributing to Wardline (Multi-OS `ARM64`)
 
-Thank you for contributing to clean-room ARM64 agent sandboxing on Windows!
+Contributions to **Wardline (Multi-OS ARM64)** are welcome. Please observe the architecture and safety invariants below before opening a pull request.
 
-## Design & Coding Rules
+## Safety & Code Architecture Rules
+- **12 `#![forbid(unsafe_code)]` Core & Feature Crates**: `wardline-core`, `wardline-policy`, `wardline-secrets`, `wardline-audit`, `wardline-fs`, `wardline-egress`, `wardline-auth`, `wardline-attest`, `wardline-mcp`, `wardline-cli`, `wardline-guest-agent`, plus standalone **`wardline-client`** MUST retain `#![forbid(unsafe_code)]`.
+- **FFI Quarantine**:
+  - OS-specific Rust FFI belongs strictly inside **`crates/wardline-platform`** (behind audited safe wrappers).
+  - Cross-OS `aarch64` sandbox kernel primitives belong in **`platforms/{common,windows,linux,macos,freebsd}`** (Zig `C-ABI v2`) and **`crates/wardline-sandbox`**.
+- **Clean-Room & Native-`aarch64` Standard**: Never weaken native `aarch64` enforcement or cross-ABI emulation rejection (Prism / Rosetta 2 / QEMU user-mode), never introduce opaque binary blobs, and ensure `L0`–`L2` tiers fail closed when unavailable.
 
-1. **Preserve `#![forbid(unsafe_code)]`**: Keep `#![forbid(unsafe_code)]` intact across `wardline-core`, `wardline-policy`, `wardline-cert`, `wardline-approval`, `wardline-egress`, `wardline-mcp`, `wardline-verify`, `wardline-cli`, `wardline-vault/src/scrub.rs`, and `wardline-guard/src/{daemon,protocol}.rs`.
-2. **Isolate Win32 & ISA Logic**: Keep ARM64 mitigation flags, Prism emulation checks (`evaluateArm64SpawnPolicy()`), and PAC/BTI probing inside `platforms/win-arm64/engine_arm64.zig` and `platforms/common/sandbox_core.zig`.
-3. **Keep Cross-Compilation Zero-MinGW**: Changes affecting linker flags or sysroot behavior must continue linking cleanly through `tools/wl-arm64-cc.cmd` and `tools/wl-arm64-link.cmd`.
+## Local Build & Verification
 
-## Pre-PR Verification Checklist
-
-On any Windows host (native ARM64 or x64 cross-compile):
-```powershell
-zig build
-zig build test
-cargo fmt --all -- --check
+### 1. Rust Workspace & Fuzzing
+```bash
+cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build --release --bins
+cargo check --manifest-path sdk/rust/Cargo.toml
 ```
 
-On native Windows on ARM64 hardware:
-```powershell
-cargo test --workspace -- --test-threads=1
+### 2. Zig `C-ABI v2` Multi-OS `aarch64` Sandbox Engines
+```bash
+zig build all-engines
+zig build common-tests
+zig build test
 ```
 
-## Licensing
+### 3. Multi-OS SDKs (`Rust`, `Python`, `TypeScript`, `Go`)
+```bash
+# Rust SDK
+cargo test --manifest-path sdk/rust/Cargo.toml
 
-Dual-licensed under **MIT OR Apache-2.0** ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)).
+# Python SDK
+python -m pytest sdk/python
+
+# TypeScript SDK
+npm test --prefix sdk/typescript
+
+# Go SDK
+go test ./...   # run inside sdk/go
+```
+
+### 4. End-to-End Verification Scripts & Supply Chain Checks
+- Run `./scripts/test-results.sh` (Linux ARM64 / Apple Silicon macOS / FreeBSD ARM64) or `powershell -File scripts/test-results.ps1` (Windows on ARM64).
+- Before submitting, ensure `cargo deny check` passes and no plaintext secrets or hardcoded credentials exist in your changes.

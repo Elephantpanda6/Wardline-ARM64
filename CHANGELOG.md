@@ -1,17 +1,37 @@
-# Changelog (`wardline-arm64`)
+# Changelog
 
-## `[0.1.0]` — Initial Clean-Room Release (`win-arm64`)
+All notable changes to **Wardline (Multi-OS ARM64)** are documented in this file.
+
+## [0.2.0] — Multi-OS & Phase 2 Architecture Release (`win-arm64`, `linux-arm64`, `macos-arm64`, `freebsd-arm64`)
+
+### Architecture & Workspace Restructuring
+- Expanded the workspace to **14 Rust crates** plus the standalone **`wardline-client`** SDK crate:
+  - **12 `#![forbid(unsafe_code)]` Rust crates**: `wardline-core`, `wardline-policy`, `wardline-secrets`, `wardline-audit`, `wardline-fs`, `wardline-egress`, `wardline-auth`, `wardline-sandbox`, `wardline-attest`, `wardline-mcp`, `wardline-cli`, and `wardline-guest-agent`.
+  - **`wardline-platform`**: Quarantined OS FFI boundary (including Windows ARM64 DPAPI & ACL helpers, POSIX credential/filesystem checks, and emulation detection).
+  - **`wardline-sandbox`**: Unified Zig `C-ABI v2` FFI shim dispatching cleanly across `aarch64` OS sandbox engines.
+- Introduced **`assets/architecture-arm64.svg`** and **`assets/architecture-arm64.png`** (`3600x2400`) along with multi-OS documentation across `README.md` and `docs/*.md`.
+
+### Multi-OS `aarch64` Zig `C-ABI v2` Engines & Isolation Tiers (`L0`–`L2`)
+- **Windows on ARM64 (`win-arm64`)**: Native `0xAA64` binary gate, Prism cross-ABI emulation firewall, `AppContainer`, restricted Job Objects, DPAPI sealing, and `-OReleaseFast` + `ntdll` MSVC static linkage (`windows-11-arm`).
+- **Linux ARM64 (`linux-arm64`)**: Unprivileged user namespaces with Ubuntu 24.04 AppArmor detection (`probeUsernsEnabled()`), Landlock LSM, 22-syscall / socket-family `seccomp-bpf` policy, QEMU user-mode emulation rejection, and `PAC`/`BTI`/`MTE` readiness.
+- **macOS Apple Silicon (`macos-arm64`)**: Seatbelt (`sandbox-exec`) profile builder with `/private` symlink alias emission, Rosetta 2 cross-ABI rejection, and POSIX `rusage` peak memory accounting.
+- **FreeBSD ARM64 (`freebsd-arm64`)**: `Capsicum` capability mode, `procdesc`, and `rctl` resource limits.
+- **Fail-Closed Isolation Tiers**: Added `L0` (Direct Process Broker), `L1` (OS Kernel Sandbox via Zig `C-ABI v2`), `L1.5` (`gVisor`), and `L2` (MicroVM via `Firecracker` / `HCS` / `VZ` paired with `wardline-guest-agent`).
+
+### Security, Policy, Egress & Audit Enhancements
+- **Operator Governance**: Added `[operator_forbid]` non-overridable ceiling rules and two-phase `[session]` (`Setup -> Run`) execution lifecycles.
+- **Deep Command Shielding**: Added 8-depth `argv_shield` wrapper and interpreter inspection to block chained shell/interpreter bypasses.
+- **Delegation & Revocation**: Implemented `WardCert` hierarchical Ed25519 capability tokens (`MAX_CHAIN_DEPTH = 8`) with cascading subtree CRL revocation.
+- **Host-Sealed Vault**: Added `--value-file` secret ingestion and live `rotate_master_key()` re-encryption across host-sealed stores.
+- **Persistent Egress Accounting**: Added `redb`-backed egress `BudgetStore` tracking alongside pinned anti-SSRF DNS resolution.
+- **Cryptographic Attestation**: Added `WLG1` `BLAKE3` Merkle inclusion proofs, signed Ed25519 checkpoints, and `.tainted` panic freeze protection.
+- **MCP Broker & Auto-Learning**: Added `wardline-mcp` `serve`, `wrap`, `servers`, and `--learn` policy synthesis.
+- **Verification & SDKs**: Expanded to **4 SDKs** (`Rust`, `Python`, `TypeScript`, `Go`), **7 formal security invariants (`I1`–`I7`)**, and **7 `cargo-fuzz` targets**, verified by multi-OS CI across Linux ARM64, macOS Apple Silicon, and Windows 11 ARM64.
+
+## [0.1.0] — Initial Clean-Room Release (`win-arm64`)
 
 ### Added
-- **12-Crate Rust Control Plane** targeting `aarch64-pc-windows-gnullvm` with zero-MinGW Zig cross-build wrappers (`tools/wl-arm64-cc.cmd`, `tools/wl-arm64-link.cmd`).
-- **Zig ARM64 Kernel Containment Engine (`wardline_engine_arm64`)**:
-  - `evaluateArm64SpawnPolicy()` enforcing native `0xAA64`, opt-in `0xA641` ARM64EC, default-deny Prism `0x8664` (`WL_ERR_PRISM_BLOCKED`), and conditional ACG suppression under Prism emulation (`apply_acg = false`, `emulation_detected = 1`).
-  - Hardware PAC/BTI probe (`checkArm64PacBti()`), DEP/ASLR/heap/font/extension-point mitigations, L0 (`CreateRestrictedToken` + `WinLowLabelSid`), L1 (`CreateAppContainerProfile` 0 network caps + `lpDesktop = ""` + `HANDLE_LIST` + `JobObject` + IOCP + deferred teardown), and staged fail-closed `L2` probe.
-- **Hardened Named Pipe TCB Daemon (`wardline-guard.exe`)**:
-  - `FILE_FLAG_FIRST_PIPE_INSTANCE | PIPE_REJECT_REMOTE_CLIENTS` + Protected User/`SYSTEM` SDDL + Process DACL protection.
-  - Reparse-safe host NTFS File Broker (`FILE_FLAG_OPEN_REPARSE_POINT`, `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)`).
-  - DPAPI `CryptProtectData` + `ChaCha20Poly1305` vault + `VirtualLock` `SecretBytes` + cross-chunk `StreamingScrubber`.
-  - Anti-SSRF DNS pinning + Windows Schannel TLS router (`wardline-egress`).
-  - Ed25519 `WardCertChain` + `crl.redb` + `BLAKE3` single-use HITL `approvals.redb` + `WLG1` CBOR audit WAL verified offline by `wardline-verify.exe`.
-- **Adapters & SDKs**: Zero-secret `wardline-mcp.exe` (`2024-11-05`) and Python/TypeScript `WardlineClient` SDKs.
-- **Architecture & Documentation**: High-definition `4800×3200` PNG / `3600×2400` SVG architecture diagrams (`assets/architecture-arm64.{png,svg}`) plus full operator, architecture, threat-model, policy, and CLI/MCP guides (`docs/`).
+- Clean-room 12-crate Rust control plane with `#![forbid(unsafe_code)]` across workspace logic crates.
+- Native Zig `C-ABI v1` sandbox engine (`engine_arm64`) enforcing PE `0xAA64` native ARM64 checks, Prism emulation rejection, Job Objects, and `AppContainer` tokens.
+- Host-sealed DPAPI vault (`wardline vault`), brokered NTFS access (`wardline fs`), DNS-pinned anti-SSRF HTTP proxy (`wardline egress`), Ed25519 capability tokens (`wardline-auth`), and hash-chained `BLAKE3` + Ed25519 audit logs (`wardline audit`).
+- Python and TypeScript zero-dependency SDKs.
