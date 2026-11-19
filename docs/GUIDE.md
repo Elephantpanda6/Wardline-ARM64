@@ -15,14 +15,15 @@
 
 ```powershell
 zig build all-engines
+zig build common-tests
 zig build test
 ```
 
-Artifacts are emitted to `zig-out/lib/`:
-- `wardline_engine_arm64.lib` / `libwardline_engine_arm64.a` (`win-arm64`)
-- `libwardline_engine_arm64_linux.a` (`linux-arm64`)
-- `libwardline_engine_arm64_macos.a` (`macos-arm64`)
-- `libwardline_engine_arm64_freebsd.a` (`freebsd-arm64`)
+Artifacts are emitted to target directories under `zig-out/`:
+- `zig-out/win-arm64/wardline_engine_arm64.lib` (`win-arm64`)
+- `zig-out/linux-arm64/libwardline_engine_arm64.a` (`linux-arm64`)
+- `zig-out/macos-arm64/libwardline_engine_arm64.a` (`macos-arm64`)
+- `zig-out/freebsd-arm64/libwardline_engine_arm64.a` (`freebsd-arm64`)
 
 ### Build Rust Binaries (ARM64 Windows Cross-Build from x64)
 
@@ -79,20 +80,26 @@ wardline run --policy schemas/profiles/arm64-server.toml --json /usr/bin/id
 wardline run --policy schemas/wardline.v1.toml --json cmd.exe /c echo blocked
 ```
 
-### Secret Vault Management & Pinned HTTPS Fetch
+### Secret Vault, Offline Verification, Checkpoints & Panic Freeze
 
 ```bash
-# Store a secret in DPAPI / 0600 ChaCha20Poly1305 vault (locked in RAM on access)
-wardline vault set --state-dir .wardline --grant-id github_api --value-env MY_TOKEN
+# Store a secret in DPAPI / 0600 ChaCha20Poly1305 vault (locked in RAM on access; or --value-file)
+wardline vault set --state-dir .wardline --grant-id github_api --host api.github.com --secret-env MY_TOKEN
+wardline vault rotate --state-dir .wardline --json
 
-# Verify offline WLG1 audit log chain and Ed25519 seals
-wardline-verify --log .wardline/audit.wlog --json
+# Offline WLG1 verification, Merkle inclusion proofs, and emergency panic freeze
+wardline-verify --log .wardline/audit.wlog --proof-index 0 --json
+wardline audit checkpoint --log .wardline/audit.wlog --out-dir .wardline --json
+wardline panic --log .wardline/audit.wlog --reason "incident containment" --json
 ```
 
 ---
 
-## 4. MCP & Thin Client SDKs
+## 4. MCP, Supply Chain, Fuzzing & Thin Client SDKs
 
-- **MCP Stdio Server**: Run `wardline-mcp --state-dir .wardline --policy schemas/wardline.v1.toml` for Claude Desktop, Cursor, or any `2024-11-05` MCP client. Tools exposed: `wardline_exec`, `wardline_fetch`, `wardline_fs_read`, `wardline_fs_write`, `wardline_learn`.
-- **Python Client**: [`clients/python/wardline_client/__init__.py`](../clients/python/wardline_client/__init__.py) — cross-platform client supporting Win32 Named Pipes on Windows and Unix Domain Sockets on Linux/macOS/FreeBSD.
-- **TypeScript Client**: [`clients/ts/src/index.ts`](../clients/ts/src/index.ts) — Node.js `net.connect` client supporting both `\\.\pipe\wardline_guard` and Unix domain socket paths over framed `[u32 LE][JSON]` IPC.
+- **MCP Stdio Server**: Run `wardline-mcp serve --pipe ...` for `2024-11-05` MCP clients (`wardline_exec`, `wardline_fetch`, `wardline_fs_read`, `wardline_fs_write`, `wardline_learn`), or `wardline-mcp wrap --name tool --policy ... -- <COMMAND>` to sandbox third-party MCP servers.
+- **Python Client**: [`clients/python/wardline_client/__init__.py`](../clients/python/wardline_client/__init__.py) — Win32 Named Pipes & Unix Domain Sockets + exit code `3` HITL errors.
+- **TypeScript Client**: [`clients/ts/src/index.ts`](../clients/ts/src/index.ts) — Node.js client supporting `\\.\pipe\wardline_guard` and Unix domain sockets.
+- **Go Client**: [`clients/go/wardline/client.go`](../clients/go/wardline/client.go) — Framed IPC + CLI wrapper (`ApprovalRequiredError` / `DeniedError`).
+- **Rust Client**: [`clients/rust/wardline-client/src/lib.rs`](../clients/rust/wardline-client/src/lib.rs) — Standalone `#![forbid(unsafe_code)]` SDK crate.
+- **Supply Chain & Fuzzing**: [`deny.toml`](../deny.toml), [`audit.toml`](../audit.toml), and 7 `cargo-fuzz` targets under [`fuzz/`](../fuzz/Cargo.toml).
