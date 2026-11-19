@@ -46,5 +46,25 @@ Because the build machine is `x86_64` Windows (not physical ARM64 hardware), the
   - `wardline-verify`: `0 tests`
 
 ### Native Hardware & Parity Note
-- **Not Executed Directly on Physical ARM64 Silicon**: Runtime execution of the `0xAA64` PE binaries on Windows on ARM (`windows-11-arm`), `linux-arm64`, `macos-arm64`, or `freebsd-arm64` hardware (and ARM64 host execution of `wardline-sandbox`, `wardline-guard`, `wardline-mcp`, `wardline-cli`, and `invariants_i1_i7`) was not performed locally because this workstation is `x86_64` Windows.
-- **Full Workspace & Live Kernel Verification on Shared Codebase**: Identical shared workspace crates (`cli`, `guard`, `mcp`, `sandbox`, `invariants_i1_i7`, plus live OS kernel containment and Python/TypeScript/Rust SDK tests) passed **62/62 unit/integration tests + 8/8 live kernel checks** on native Windows x64 and **62/62 + 8/8** on WSL2 Ubuntu Linux x64 in `Wardline-x64`.
+- **Not Executed Directly on Physical ARM64 Silicon**: Runtime execution of the `0xAA64` PE binaries on physical Windows on ARM (`windows-11-arm`), native `linux-arm64` kernel, `macos-arm64`, or `freebsd-arm64` hardware (and native ARM64 host execution of `wardline-sandbox`, `wardline-guard`, `wardline-mcp`, `wardline-cli`, and `invariants_i1_i7`) was not performed locally because this workstation is `x86_64` Windows.
+- **Full Workspace & Live Kernel Verification on Shared Codebase**: Identical shared workspace crates (`cli`, `guard`, `mcp`, `sandbox`, `invariants_i1_i7`, plus live OS kernel containment) passed **62/62 unit/integration tests + 8/8 live kernel checks** on native Windows x64 and **62/62 + 8/8** on WSL2 Ubuntu Linux x64 in `Wardline-x64`.
+
+---
+
+## 4. `linux-arm64` User-Mode Emulation (`qemu-aarch64 10.2.1`)
+
+Compiled standalone `ELF64 AArch64` (`aarch64-linux-musl`) Zig test binaries and executed them inside WSL2 Ubuntu via `qemu-aarch64 version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)`:
+- **`platforms/common/common.zig` (`AArch64` ELF)**: **3/3 passed** (`classifyPeBytes`, `classifyBinaryBytes`, `C-ABI v2 struct sizes match C contract`).
+- **`platforms/linux/engine_linux.zig` (`AArch64` ELF)**: **1/1 passed** (`seccomp-bpf filter validates native arch, mount API blocks, and socket families`).
+- **`wl_probe_capabilities` (`AArch64` ELF smoke binary)**: **Exited 0** (`rc=0 abi=2 size=48 os=2 arch=2 build=61833 page=4096 mask=5 landlock=0 cgroup_v2=1 ext_flags=30 flags=0x5e`; `landlock=0` expected under QEMU user-mode syscall interception).
+
+---
+
+## 5. Polyglot Client SDK Verification (Windows & WSL2 Ubuntu Linux)
+
+| SDK | Windows x64 Status | WSL2 Ubuntu Linux x64 Status | Notes |
+|---|---|---|---|
+| **Rust SDK** (`clients/rust/wardline-client`) | **1/1 passed** (`cargo test --offline`) | **1/1 passed** (`cargo test --offline`) | `#![forbid(unsafe_code)]`; IPC framing & typed error mapping |
+| **Python SDK** (`clients/python`) | **1/1 passed** (`unittest`) | **1/1 passed** (`unittest`) | `[u32 LE][JSON]` framing & exit-code `3` error classes |
+| **TypeScript SDK** (`clients/ts`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | Verified Node v24 direct TypeScript execution on both OSes |
+| **Go SDK** (`clients/go/wardline`) | **1/1 passed** (`go1.27.4 windows/amd64`) | **1/1 passed** (`go1.26.8 linux/amd64`) | `TestIPCFrameAndCheckedResponse` passed on both OSes |
