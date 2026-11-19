@@ -66,12 +66,7 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let opt_flag = if profile == "release" {
-        "-OReleaseFast"
-    } else {
-        "-ODebug"
-    };
+    let opt_flag = "-OReleaseFast";
 
     let (zig_target, engine_rel, lib_name, lib_file, sys_libs): (
         &str,
@@ -85,14 +80,14 @@ fn main() {
             "win-arm64/engine_arm64.zig",
             "wardline_engine_arm64",
             "wardline_engine_arm64.lib",
-            &["advapi32", "userenv", "kernel32"],
+            &["advapi32", "userenv", "kernel32", "ntdll"],
         ),
         ("windows", "aarch64", _) => (
             "aarch64-windows-gnu",
             "win-arm64/engine_arm64.zig",
             "wardline_engine_arm64",
             "libwardline_engine_arm64.a",
-            &["advapi32", "userenv", "kernel32"],
+            &["advapi32", "userenv", "kernel32", "ntdll"],
         ),
         ("windows", "x86_64", "msvc") => (
             if cfg!(windows) {
@@ -103,14 +98,14 @@ fn main() {
             "win-x64/engine_x64.zig",
             "wardline_engine_x64",
             "wardline_engine_x64.lib",
-            &["advapi32", "userenv", "kernel32"],
+            &["advapi32", "userenv", "kernel32", "ntdll"],
         ),
         ("windows", "x86_64", _) => (
             "x86_64-windows-gnu",
             "win-x64/engine_x64.zig",
             "wardline_engine_x64",
             "libwardline_engine_x64.a",
-            &["advapi32", "userenv", "kernel32"],
+            &["advapi32", "userenv", "kernel32", "ntdll"],
         ),
         ("linux", "aarch64", "musl") => (
             "aarch64-linux-musl",

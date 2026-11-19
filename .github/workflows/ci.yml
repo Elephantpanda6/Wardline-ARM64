@@ -62,13 +62,18 @@ jobs:
         shell: pwsh
         run: |
           zig build all-engines
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           zig build test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Cargo clippy & full live workspace tests
         shell: pwsh
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --workspace -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release --bins
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   linux-arm64-native:
     name: Linux ARM64 Native Build & Test
