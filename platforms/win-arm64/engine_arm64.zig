@@ -94,16 +94,26 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
     var native_machine: w.WORD = 0;
     _ = w.IsWow64Process2(w.GetCurrentProcess(), &proc_machine, &native_machine);
 
+    const pac_bti = checkArm64PacBti();
+    var ext_flags: u8 = 0;
+    if (pac_bti != 0) {
+        ext_flags |= common.WL_ARM64_FEAT_PAC | common.WL_ARM64_FEAT_BTI;
+    }
+    if (sys_info.dwPageSize > 4096) {
+        ext_flags |= common.WL_ARM64_FEAT_LARGE_PAGES;
+    }
+
     caps.* = .{
         .arch = @intFromEnum(common.WlArch.arm64),
         .abi_version = common.abi_version,
         .is_wow64_emulated = if (proc_machine != 0) 1 else 0,
         .cet_shadow_stack_supported = 0,
-        .pac_bti_available = checkArm64PacBti(),
+        .pac_bti_available = pac_bti,
         .hyperv_hcs_available = checkHcsAvailable(),
         .appcontainer_supported = if (os_ver.dwBuildNumber >= 9200 or os_ver.dwMajorVersion >= 10) 1 else 0,
         .job_object_iocp_supported = 1,
-        .reserved = .{ 0, 0 },
+        .os_kind = @intFromEnum(common.WlOsKind.windows),
+        .arm64_ext_flags = ext_flags,
         .os_build_number = os_ver.dwBuildNumber,
         .page_size = sys_info.dwPageSize,
     };

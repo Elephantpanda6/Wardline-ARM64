@@ -1,105 +1,96 @@
 <div align="center">
-  <img src="assets/banner.svg" alt="Wardline Windows ARM64 Banner" width="100%"/>
+
+<img src="assets/banner.svg" alt="Wardline banner" width="100%" />
+
+**Zero-trust capability runtime and kernel containment engine for AI tools & agents across ARM64 and x64.**
+
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-12%20crates-orange.svg)](#architecture)
+[![Zig](https://img.shields.io/badge/zig-4--OS%20kernel%20engines-f7a41d.svg)](#platform--os-matrix)
+[![Primary Architecture](https://img.shields.io/badge/arch-ARM64%20%7C%20x64-0f766e.svg)](#platform--os-matrix)
+
 </div>
 
-<p align="center">
-  <strong>Clean-Room Zero-Trust Capability Broker, Kernel Process Sandbox &amp; Anti-SSRF Egress Runtime for Windows on ARM64</strong>
-</p>
+---
 
-<p align="center">
-  <a href="docs/ARCHITECTURE.md"><img src="https://img.shields.io/badge/target-aarch64--pc--windows--gnullvm-0F172A?style=flat-square&logo=arm" alt="Target ARM64"/></a>
-  <a href="docs/ARCHITECTURE.md"><img src="https://img.shields.io/badge/engine-Zig_0.17.1_(wardline__engine__arm64)-F7A41D?style=flat-square" alt="Zig Engine"/></a>
-  <a href="docs/POLICY.md"><img src="https://img.shields.io/badge/prism-Default--Deny_(0x8664)-DC2626?style=flat-square" alt="Prism Blocked Default"/></a>
-  <a href="docs/THREAT_MODEL.md"><img src="https://img.shields.io/badge/sandbox-L0_Job_%2B_L1_AppContainer-059669?style=flat-square" alt="Sandbox Tiers"/></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT_OR_Apache--2.0-2563EB?style=flat-square" alt="License"/></a>
-</p>
+Wardline sits between untrusted AI callers (MCP hosts, LLM agents, CLI automations, Python/TypeScript SDKs) and host resources. Instead of relying on best-effort wrappers or exposing host tokens in child environments, Wardline enforces **default-deny capability certificates**, **multi-OS kernel containment** written in Zig, **reparse/symlink-safe workspace brokering**, **locked-memory secret custody**, **SSRF-pinned HTTPS egress**, and **BLAKE3 + Ed25519 cryptographic audit logs**.
+
+## Architecture
+
+![Wardline ARM64 Multi-OS Architecture](assets/architecture-arm64.png)
+
+Source vector diagram: [`assets/architecture-arm64.svg`](assets/architecture-arm64.svg) · Detailed breakdown: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+
+### Defense Zones
+
+1. **Zone 1 — Caller & Hardened IPC Boundary**: `wardline-mcp` (stateless MCP stdio JSON-RPC `2024-11-05` server, `#![forbid(unsafe_code)]`), `wardline` CLI, and thin Python/TypeScript clients communicate with `wardline-guard` over a mutually isolated local channel:
+   - **Windows**: Named Pipe (`\\.\pipe\wardline_guard`, `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_TYPE_BYTE`, `PIPE_REJECT_REMOTE_CLIENTS`, protected `User+SYSTEM` DACL).
+   - **Linux / macOS / FreeBSD**: Unix Domain Socket (`0600` permissions + `SO_PEERCRED` / `LOCAL_PEERCRED` UID verification).
+2. **Zone 2 — Trusted Computing Base (`wardline-guard`)**:
+   - **Capability Authority (`wardline-cert`)**: Ed25519 CBOR certificates (`"wardline.cert.v1\0"`), monotonic delegation attenuation, `redb` Certificate Revocation List (`crl.redb`).
+   - **Policy & LOLBin/Path Shield (`wardline-policy`, `wardline-core`)**: Default-deny TOML policy evaluation, 25 Windows + 34 Unix LOLBins blocked, 19 Windows + 14 Unix script extensions blocked, NT/POSIX traversal & alternate-stream rejection, multi-format binary inspection (`PE`, `ELF`, `Mach-O`).
+   - **Digest-Bound HITL Approval (`wardline-approval`)**: Single-use tickets stored in `approvals.redb` bound to `BLAKE3("wardline.approval.v1\0" || action)`.
+   - **Secret Vault & Cross-Chunk Scrubber (`wardline-vault`)**: `ChaCha20Poly1305` sealed vault wrapped by Win32 DPAPI (`CryptProtectData`) on Windows or `0700/0600 WLV1` custody on Unix, locked in RAM (`VirtualLock` / `mlock`), zeroized on drop, and scrubbed across arbitrary pipe/HTTP chunk boundaries (`[WARDLINE_REDACTED:<grant_id>]`).
+   - **Reparse/Symlink-Safe File Broker (`file_broker.rs`)**: Segment-by-segment root walk blocking Windows reparse points/junctions (`FILE_FLAG_OPEN_REPARSE_POINT`) and Unix symlinks (`O_NOFOLLOW`) within `--base-dir`.
+   - **Append-Only WLG1 WAL (`wardline-log`)**: `LockFileEx` / `flock(LOCK_EX)` exclusive file lock, BLAKE3 chain links, and Ed25519 checkpoints verified offline by `wardline-verify`.
+3. **Zone 3 — Anti-SSRF Pinned Egress (`wardline-egress`)**: Blocks loopback, RFC1918, CGNAT, link-local, cloud IMDS (`169.254.169.254`, `metadata.google.internal`), internal domains, and IPv6 by default; pins a single DNS resolution directly into the TLS dialer; injects authorized credentials host-side.
+4. **Zone 4 — Multi-OS Zig Kernel Containment Engines (`platforms/`)**: Unified `C-ABI v1` static libraries linking directly into `wardline-sandbox` across Windows, Linux, macOS, and FreeBSD.
 
 ---
 
-**Wardline (`win-arm64`)** is the dedicated **Windows on ARM64 (`aarch64-pc-windows-gnullvm`)** edition of the Wardline zero-trust agent capability broker and process sandbox. It brings full parity for brokered NTFS file access, DPAPI + `ChaCha20Poly1305` secret custody, SSRF-pinned HTTPS egress, and L0/L1 Win32 process containment while adding ARM64-specific controls for **`0xAA64` native binaries, `0xA641` ARM64EC opt-in, default-deny Prism `0x8664` emulation gating with conditional ACG suppression, hardware PAC/BTI telemetry, and zero-MinGW Zig cross-compilation wrappers (`tools/wl-arm64-*.cmd`)**.
+## Platform & OS Matrix
 
-> [!IMPORTANT]
-> Looking for the Windows x64 edition (`x86_64-pc-windows-msvc` + CET Shadow Stack `engine_x64.zig`)? See the sibling repository [`Elephantpanda6/Wardline-x64`](https://github.com/Elephantpanda6/Wardline-x64).
+| OS / Architecture | Kernel Engine (`platforms/`) | Isolation Mechanisms (`L0` / `L1` / `L2`) | Binary Preflight & HW Telemetry |
+|---|---|---|---|
+| **Windows ARM64** | `win-arm64/engine_arm64.zig` + `sandbox_core.zig` | `L0` RestrictedToken+LowLabel; `L1` AppContainer (0 Net Caps) + JobObject + IOCP; `L2` HCS probe (fail-closed) | PE `0xAA64` native, opt-in `0xA641` ARM64EC, opt-in `0x8664` Prism (ACG skipped for JIT); `PAC/BTI` probe |
+| **Linux ARM64 & x64** | `linux/engine_linux.zig` + `posix_sandbox.zig` | `L0` `PR_SET_NO_NEW_PRIVS` + `rlimit`; `L1` `UserNS` + `NetNS` + Landlock ABI + seccomp-BPF (`AF_INET`/`AF_INET6`/`AF_NETLINK`/`AF_PACKET` blocked) | ELF64/32 + GNU BTI/PAC/CET notes; `AT_HWCAP` (`PAC`, `BTI`, `MTE`, `SVE`, `SVE2`, 16K/64K pages) + `/dev/kvm` probe |
+| **macOS Apple Silicon & Intel** | `macos/engine_macos.zig` + `posix_sandbox.zig` | `L0` `rlimit` + closed FDs; `L1` Seatbelt SBPL default-deny profile (scoped RO/RW, zero network) | Mach-O & Universal Fat slices (`ARM64`, `X86_64`); Apple Silicon / `16K` page awareness |
+| **FreeBSD ARM64 & x64** | `bsd/engine_bsd.zig` + `posix_sandbox.zig` | `L0` `rlimit`; `L1` Capsicum `cap_enter()` capability mode + `fexecve()` | ELF64 (`EM_AARCH64`, `EM_X86_64`) |
 
----
-
-## System Architecture (`win-arm64`)
-
-<p align="center">
-  <a href="assets/architecture-arm64.png">
-    <img src="assets/architecture-arm64.png" alt="Wardline Windows ARM64 Zero-Trust System Architecture (4800x3200 Ultra-HD)" width="100%"/>
-  </a>
-</p>
-
-<p align="center">
-  <sub>Rendered at <strong>4800×3200</strong> from clean vector source: <a href="assets/architecture-arm64.png">architecture-arm64.png</a> • <a href="assets/architecture-arm64.svg">architecture-arm64.svg (lossless SVG)</a> • <a href="docs/ARCHITECTURE.md">Full Architectural Walkthrough →</a></sub>
-</p>
+See [`docs/PLATFORMS_AND_USECASES.md`](docs/PLATFORMS_AND_USECASES.md) for device-class guidance across **ARM64 laptops, ARM64 cloud servers (Neoverse/Graviton/Ampere/Grace), ARM64 edge SBCs, and x64 workstations/servers**, and ready-to-use profile policies under [`schemas/profiles/`](schemas/profiles/).
 
 ---
 
-## ARM64 Multi-ISA & Prism Policy Matrix (`evaluateArm64SpawnPolicy`)
+## Quickstart
 
-Windows on ARM64 can encounter three PE machine types. `engine_arm64.zig` enforces strict preflight classification before calling `CreateProcessW`:
-
-| Child PE Machine | Constant | Default `mode = "strict_native"` | `mode = "allow_arm64ec"` | `mode = "allow_prism_x64"` | ACG (`PROHIBIT_DYNAMIC_CODE`) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`0xAA64` (ARM64 Native)** | `IMAGE_FILE_MACHINE_ARM64` | **Allow** | **Allow** | **Allow** | **Enabled** (when `acg = true`) |
-| **`0xA641` (ARM64EC)** | `IMAGE_FILE_MACHINE_ARM64EC` | **Deny** (`WL_ERR_PE_DISALLOWED_ARCH`) | **Allow** | **Allow (Native ABI)** | **Enabled** (when `acg = true`) |
-| **`0x8664` (x64 via Prism)** | `IMAGE_FILE_MACHINE_AMD64` | **Deny** (`WL_ERR_PRISM_BLOCKED`) | **Deny** | **Allow** (`emulation = true`) | **Suppressed** (avoids Prism JIT `STATUS_DYNAMIC_CODE_BLOCKED`) |
-| **`0x014C` / Script / Non-PE** | `I386` / Raw | **Deny** (`WL_ERR_PE_DISALLOWED_ARCH`) | **Deny** | **Deny** | N/A |
-
----
-
-## Key Capabilities
-
-- **Zero-Trust Asymmetric Delegation (`wardline-cert`)**: Ed25519 signature chains over canonical CBOR (`"wardline.cert.v1\0"`) supporting `arch = "arm64"` constraints, monotonic attenuation, and `crl.redb` revocation.
-- **Hardened Single-Instance Guard (`wardline-guard.exe`)**: `FILE_FLAG_FIRST_PIPE_INSTANCE | PIPE_REJECT_REMOTE_CLIENTS` on `\\.\pipe\wardline_guard`, protected SDDL `D:P(A;OICI;GA;;;{UserSID})(A;OICI;GA;;;SY)`, and process DACL hardening (`PROTECTED_DACL_SECURITY_INFORMATION`).
-- **Reparse-Safe NTFS File Broker (`file_broker.rs`)**: Segment-by-segment traversal with `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`, rejecting junctions/symlinks (`FILE_ATTRIBUTE_REPARSE_POINT`), checking `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)`, and requiring consumed `BLAKE3` write approvals.
-- **DPAPI Vault & Streaming Redaction (`wardline-vault`)**: `CryptProtectData` master key + `ChaCha20Poly1305` secrets, `VirtualLock` + `Zeroize` RAM hygiene, and cross-chunk `[WARDLINE_REDACTED:<grant_id>]` scrubbing.
-- **Anti-SSRF Pinned Egress (`wardline-egress`)**: Single-lookup DNS IP pinning + Windows Schannel TLS, blocking `169.254.0.0/16` IMDS, RFC1918, loopback, `::ffff:`, `localhost`/`.local`/`.internal`, and IPv6 by default.
-- **Tamper-Evident Audit WAL (`wardline-log` + `wardline-verify.exe`)**: `WLG1` binary log with `LockFileEx` + `BLAKE3` hash chaining + `Ed25519` checkpoints.
-- **Self-Contained Zig ARM64 Cross-Build**: [`tools/wl-arm64-cc.cmd`](tools/wl-arm64-cc.cmd) & [`tools/wl-arm64-link.cmd`](tools/wl-arm64-link.cmd) drive `zig cc -target aarch64-windows-gnu` automatically via [`.cargo/config.toml`](.cargo/config.toml) — no external MinGW-LLVM sysroot needed.
-
----
-
-## Quickstart (`aarch64-pc-windows-gnullvm`)
-
-### Prerequisites
-
-- **Rust toolchain** with `aarch64-pc-windows-gnullvm` target (`rustup target add aarch64-pc-windows-gnullvm`)
-- **Zig `0.17.1`** on `PATH` (or WinGet packages directory)
-- **Python 3** (used by `tools/wl-arm64-{cc,link}.{cmd,py}` wrappers)
-
-### Build, Cross-Verify & Inspect
+### Build Windows ARM64 (Cross-Compile from Windows x64 or Native Windows ARM64)
 
 ```powershell
-# 1. Build Zig ARM64 kernel sandbox engine (runs native tests on ARM64; cross-compiles tests on x64 hosts)
-zig build
+# Compile all 4-OS ARM64 Zig containment engines and run native Zig unit tests
+zig build all-engines
 zig build test
 
-# 2. Lint & compile stripped ARM64 release binaries (PE machine 0xAA64)
-cargo clippy --workspace --all-targets -- -D warnings
+# Cross-compile the Rust workspace for Windows ARM64 (using tools\wl-arm64-{cc,link}.cmd from repo root)
+cargo clippy --target aarch64-pc-windows-gnullvm --workspace --all-targets -- -D warnings
+cargo build --target aarch64-pc-windows-gnullvm --release --bins
+```
+
+### Build Native (Linux / macOS / FreeBSD / Windows MSVC)
+
+```bash
+# On Linux, macOS, FreeBSD, or Windows host:
+cargo test --workspace -- --test-threads=1
 cargo build --release --bins
 
-# 3. On native Windows on ARM64 hardware (or windows-11-arm CI runner):
-cargo test --workspace -- --test-threads=1
-.\target\aarch64-pc-windows-gnullvm\release\wardline.exe doctor --json
+# Probe host OS, ISA, page size, security hardware extensions, and kernel engine ABI
+./target/release/wardline doctor --json
+
+# Validate a profile policy (e.g. ARM64 server or laptop)
+./target/release/wardline policy validate schemas/profiles/arm64-server.toml --json
 ```
 
 ---
 
-## Documentation Suite
+## Documentation
 
-- **[Operator & Developer Guide](docs/GUIDE.md)** — ARM64 cross/native builds via Zig wrappers, `doctor --json` PAC/BTI inspection, Prism policy authoring, vault/cert/HITL workflows, and MCP integration.
-- **[System Architecture Deep Dive](docs/ARCHITECTURE.md)** — 5-zone design, C-ABI v1 contract, `engine_arm64.zig` multi-ISA decision engine, conditional ACG suppression under Prism, and Zig cross-linker architecture.
-- **[Threat Model & Security Analysis](docs/THREAT_MODEL.md)** — Adversary matrix, Prism JIT vs ACG trade-off analysis, NTFS junction/SSRF/LOLBin defenses, and staged `L2` MicroVM boundaries.
-- **[Policy Manifest & WardCert Reference](docs/POLICY.md)** — Full `schemas/wardline.v1.toml` specification including `strict_native`, `allow_arm64ec`, and `allow_prism_x64`.
-- **[CLI, MCP, Named Pipe IPC & SDK Reference](docs/CLI_AND_MCP.md)** — Complete flags for all 4 `0xAA64` binaries, MCP `2024-11-05` tools, pipe framing, and Python/TypeScript SDKs.
-- **[Verification & Test Report (`win-arm64`)](docs/TEST_RESULTS.md)** — Cross-compilation build checks, PE `0xAA64` binary verification, Zig engine tests, and native `windows-11-arm` CI matrix.
-- **[Security Policy](.github/SECURITY.md)** • **[Contributing Guide](CONTRIBUTING.md)** • **[Changelog](CHANGELOG.md)**
-
----
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Crates, Zig C-ABI v1, IPC framing, and trust boundaries
+- [`docs/PLATFORMS_AND_USECASES.md`](docs/PLATFORMS_AND_USECASES.md) — Laptops, servers, edge SBCs, workstations, and 4-OS engine matrix
+- [`docs/GUIDE.md`](docs/GUIDE.md) — Build, CLI workflows, MCP setup, and Python/TypeScript SDK integration
+- [`docs/POLICY.md`](docs/POLICY.md) — Policy v1 TOML reference, isolation levels, architecture gates, and LOLBin rules
+- [`docs/CLI_AND_MCP.md`](docs/CLI_AND_MCP.md) — CLI command reference and MCP JSON-RPC tool schemas
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — Defender assumptions, attacker model, and structural mitigations
+- [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) — Reproducible verification runs and hardware/OS test matrix
 
 ## License
 
-Dual-licensed under **[MIT](LICENSE-MIT)** OR **[Apache-2.0](LICENSE-APACHE)** at your option.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).

@@ -1,41 +1,30 @@
-# Wardline (`win-arm64`) — Threat Model & Security Analysis
+# Wardline Threat Model
 
-This document details the security boundaries, ARM64-specific emulation threat vectors, Win32 mitigations, and explicit non-goals of **`wardline-arm64`**.
+## 1. Security Objective
 
----
+Ensure that untrusted AI agents, generated tool invocations, third-party plugins, and fetched remote content cannot execute arbitrary host binaries, escape their workspace, exfiltrate host credentials, pivot into loopback/cloud metadata/LAN endpoints, or tamper undetected with the audit trail — across Windows, Linux, macOS, and FreeBSD on both ARM64 and x64.
 
-## 1. ARM64-Specific Threat Surface: Binary Translation & Mixed-ISA Confused Deputy
+## 2. Adversary Capabilities Assumed
 
-On Windows on ARM64, the OS transparently translates `0x8664` (x64) PE executables through the **Prism** emulator unless blocked by policy. Left unchecked, this creates two distinct risks:
-1. **Unannounced JIT Memory Pages**: Prism emits writable/executable JIT caches at runtime. Enabling `MITIGATION_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON` (ACG) blindly crashes emulated x64 tools (`STATUS_DYNAMIC_CODE_BLOCKED`), often templating teams into disabling ACG globally.
-2. **ISA Policy Bypass / Unaudited Third-Party x64 Binaries**: Agents could drop prebuilt x64 executables expecting silent Prism emulation.
+1. **Prompt-injected or compromised AI caller**: Sends malicious arguments to MCP tools, SDKs, or IPC framing (`..` path traversal, NT device paths `\\?\`, symlinks/junctions, LOLBins like `powershell`/`bash`/`curl`, oversized frames, or unauthorized capability certs).
+2. **Hostile child process inside sandbox**: Attempts socket dials (IPv4/IPv6/raw/Netlink), credential environment inspection, file descriptor inheritance reuse, privilege escalation (`setuid`/`sudo`/`ptrace`), or echoing secrets across stdout/stderr chunk boundaries.
+3. **Hostile remote HTTP server**: Attempts DNS rebinding (`1.2.3.4` -> `127.0.0.1` or `169.254.169.254`), HTTP redirect pivoting, response-body credential reflection, or oversized response DoS.
+4. **Cross-architecture evasion (ARM64 hosts)**: Attempts to spawn x64 JIT-emulated code (`0x8664` Prism / Rosetta / QEMU) to evade native PAC/BTI or ACG mitigations.
+5. **Post-incident log tampering**: Edits, truncates, or reorders `.wardline/audit.wlog` frames.
 
-**Wardline's Control (`engine_arm64.zig`)**:
-- **`mode = "strict_native"` (default)** rejects all `0x8664` (`WL_ERR_PRISM_BLOCKED`) and `0xA641` (`WL_ERR_PE_DISALLOWED_ARCH`) executables prior to process launch.
-- **`mode = "allow_prism_x64"`** opt-in **only relaxes ACG (`apply_acg = false`) for verified `emulation = true` children**, keeping strict ACG turned **ON** for every `0xAA64` and `0xA641` process while tagging `emulation_detected = 1` in `.wardline/audit.wlog`.
+## 3. Structural Defenses
 
----
+| Threat Vector | Mitigation & Code Location |
+|---|---|
+| Ambient secret exposure in child RAM/env | Secrets live only inside `wardline-vault` (`VirtualLock`/`mlock` + zeroize-on-drop, DPAPI or `0600 WLV1`); spawned children receive `env_clear()` + allowlist only; stdout/stderr and HTTP responses pass through cross-chunk `StreamingScrubber`. |
+| Shell / interpreter / script living-off-the-land | `wardline-core/src/lolbin.rs` blocks 25 Windows + 34 Unix LOLBins and 19 Windows + 14 Unix script extensions; `wardline-policy` enforces strict binary allowlists. |
+| Symlink / NTFS junction / ADS escape | `wardline-core/src/path.rs` rejects raw prefixes & `:`; `wardline-guard/src/file_broker.rs` walks every path segment from `base_dir` checking `FILE_ATTRIBUTE_REPARSE_POINT` (Win) or `O_NOFOLLOW` (Unix). |
+| Sandbox network escape & SSRF | `L1` child runs with `0` AppContainer network capabilities (Windows), empty `CLONE_NEWNET` + BPF socket family filter (Linux), or Seatbelt `(deny network*)` (macOS); all egress goes through `wardline-egress` single-lookup DNS pinning. |
+| IPC hijacking | Windows `\\.\pipe\wardline_guard` requires `FIRST_PIPE_INSTANCE`, `REJECT_REMOTE_CLIENTS`, and user+SYSTEM SDDL; Unix UDS enforces `0600` file mode and `SO_PEERCRED`/`LOCAL_PEERCRED` peer UID equality. |
+| Cross-ISA bypass on ARM64 | `binary.rs` + Zig `engine_arm64.zig` / `engine_linux.zig` / `engine_macos.zig` enforce `StrictNative` by default and block foreign ISAs fail-closed unless explicitly opted in. |
+| Audit tampering | `wardline-log` locks with `LockFileEx`/`flock`, hash-chains every frame (`BLAKE3("wardline.wlog.v1\0" || ...)`), and appends Ed25519 seals verified offline by `wardline-verify`. |
 
-## 2. Shared Adversary Matrix
+## 4. Explicit Out-of-Scope / Trust Boundaries
 
-| Threat / Attack Vector | Wardline Defense (`win-arm64`) |
-| :--- | :--- |
-| **T1. LOLBin & Script Proxy Execution** | Blocks **25 LOLBins (50 patterns)** (`cmd`, `powershell`, `pwsh`, `wscript`, `cscript`, `mshta`, `rundll32`, `regsvr32`, `certutil`, `bitsadmin`, `wmic`, `msiexec`, `installutil`, `msbuild`, `bash`, `wsl`, …) + **19 script extensions** with trailing-dot & case normalization; `engine_arm64.zig` also drops non-PE scripts (`WL_ERR_PE_DISALLOWED_ARCH`). |
-| **T2. Unwanted Prism / x86 / Foreign ISA** | `evaluateArm64SpawnPolicy()` rejects `0x014C` (x86) outright, rejects `0x8664` unless `allow_prism_x64 = true`, and rejects `0xA641` unless `allow_arm64ec = true`. |
-| **T3. NTFS Junction / Reparse & ADS Escape** | `path.rs` denies `\\?\`, `\\.\`, `\??\`, UNC `\\`, and ADS `:`. `file_broker.rs` walks every path component with `FILE_FLAG_OPEN_REPARSE_POINT \| FILE_FLAG_BACKUP_SEMANTICS`, fails on `FILE_ATTRIBUTE_REPARSE_POINT`, and confirms `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)` inside `--base-dir`. |
-| **T4. Ambient Credential Harvest** | `build_child_env()` runs `env_clear()` + allowlist; vault keys stay sealed under Win32 DPAPI + `ChaCha20Poly1305` and locked RAM (`VirtualLock` + `Zeroize`). `L1 AppContainer` removes unconstrained filesystem visibility. |
-| **T5. Cross-Chunk Secret Exfiltration** | `StreamingScrubber` scans child `stdout`/`stderr` and HTTP headers/bodies across arbitrary buffer splits, replacing granted secrets with `[WARDLINE_REDACTED:<grant_id>]`. |
-| **T6. SSRF, Cloud IMDS & DNS Rebinding** | `ssrf.rs` + `client.rs` resolve DNS once (`resolve_and_pin_addresses`), block `localhost`, `.local`, `.internal`, `metadata.google.internal`, `127/8`, `169.254.0.0/16` IMDS, RFC1918, `100.64/10`, `::ffff:`, and IPv6 (default off), then dial via `connect_pinned` + Schannel TLS. `L1` child has 0 net capabilities. |
-| **T7. Mutating Approval Replay / Swap** | `approvals.redb` binds each ticket to `BLAKE3("wardline.approval.v1\0" \|\| canonical_action)` and atomically transitions `Approved -> Consumed` on first use. |
-| **T8. Delegation Escalation** | `WardCertChain` (`Ed25519` over CBOR `"wardline.cert.v1\0"`) validates strictly non-widening TTL, isolation, `arch = "arm64"`, depth, subset scopes, and durable `crl.redb` revocations. |
-| **T9. Pipe Squatting & Memory Inspection** | `FILE_FLAG_FIRST_PIPE_INSTANCE \| PIPE_REJECT_REMOTE_CLIENTS` + Protected SDDL (`UserSID` + `SYSTEM`) + daemon `PROTECTED_DACL_SECURITY_INFORMATION`. |
-| **T10. Audit Log Truncation / Tamper** | `WLG1` append-only log with Win32 `LockFileEx`, `FlushFileBuffers`, `BLAKE3` chain links, and `Ed25519` seals verified offline by `wardline-verify.exe`. |
-
----
-
-## 3. Trust Assumptions & Staged Scope
-
-1. **Non-Admin User Boundary**: Local Windows Administrators / `SYSTEM` sit outside user-mode container boundaries; run `wardline-guard.exe` as a non-elevated user.
-2. **Host-Specific Hardware PAC/BTI**: `pac_bti_available` dynamically reflects Silicon + Windows OS pointer-auth capability in `wardline doctor --json`.
-3. **Cross-Compiled Verification Limits**: Cross-compilation on x64 hosts validates Rust lint, `0xAA64` PE emission, and host common tests, while live Win32 AppContainer / IOCP / Prism probes execute on native Windows on ARM64 (`windows-11-arm`).
-4. **`L2 MicroVM` Staged**: `hyperv_hcs_available` is probed, while `L2` spawn fails closed (`WL_ERR_NOT_SUPPORTED_ARCH`) until guest runner integration ships.
+- **Compromised host OS kernel or elevated Administrator/`root` attacker**: Wardline protects host integrity *against* sandboxed agents and untrusted inputs; it does not isolate a compromised host kernel from itself (for hostile untrusted kernels/multi-tenant workloads, `L2` hardware MicroVMs are required and fail closed today).
+- **Authorized destructive actions within policy**: An action permitted by both policy and capability cert (or explicitly approved via HITL ticket) can modify permitted resources within `--base-dir`. Use HITL approvals (`require_approval = true`) and narrow capability scopes for high-risk mutations.

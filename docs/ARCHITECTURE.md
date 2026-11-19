@@ -1,73 +1,56 @@
-# Wardline (`win-arm64`) — System Architecture Specification
+# Wardline System Architecture (ARM64 Focus, Multi-OS)
 
-Deep architectural reference for **Wardline (`win-arm64`)**, targeting `aarch64-pc-windows-gnullvm` + Zig `0.17.1` (`aarch64-windows-gnu`).
+Wardline separates untrusted AI/automation callers from privileged OS, filesystem, credential, and network execution via a clean 4-zone, 12-crate Rust + Zig kernel containment architecture.
 
-<p align="center">
-  <a href="../assets/architecture-arm64.png">
-    <img src="../assets/architecture-arm64.png" alt="Wardline Windows ARM64 Architecture Diagram" width="100%"/>
-  </a>
-</p>
+![Wardline Architecture](assets/architecture-arm64.png)
 
-> Lossless vector source: [`assets/architecture-arm64.svg`](../assets/architecture-arm64.svg) (`3600×2400` SVG) • Ultra-HD raster: [`assets/architecture-arm64.png`](../assets/architecture-arm64.png) (`4800×3200` PNG).
+## 1. Crate Structure (12 Workspace Crates)
 
----
+| Crate | Responsibility | Safety Profile |
+|---|---|---|
+| `wardline-core` | Path canonicalization/jail checks, 25 Win + 34 Unix LOLBin & script shield, multi-format binary inspector (`PE`, `ELF`, `Mach-O`, `MachOFat`), host `TargetOs`/`DeviceClass`/`SiliconFamily` detection, PE & ELF property note parsing | `#![forbid(unsafe_code)]` |
+| `wardline-policy` | Schema v1 TOML compiler, deterministic `Allow`/`NeedApproval`/`Deny` evaluator, binary & ISA preflight gating | `#![forbid(unsafe_code)]` |
+| `wardline-cert` | Ed25519 CBOR capability certificates (`"wardline.cert.v1\0"`), monotonic attenuation verification, scope matcher (`fs-read`, `fs-write`, `fs-delete`, `exec`, `net:host[:/path]`, `vault:grant_id`) | `#![forbid(unsafe_code)]` |
+| `wardline-approval` | Single-use HITL approval tickets stored in `redb` (`approvals.redb`), cryptographically bound to `BLAKE3("wardline.approval.v1\0" || action)` | `#![forbid(unsafe_code)]` |
+| `wardline-log` | Append-only `WLG1` CBOR write-ahead audit log, BLAKE3 chain hashing, Ed25519 checkpoints, exclusive locking (`LockFileEx` on Windows, `flock` on Unix) | Win32 / POSIX FFI |
+| `wardline-vault` | `ChaCha20Poly1305` encrypted credential store, Win32 DPAPI master key wrapping or `0700/0600 WLV1` Unix custody, `VirtualLock`/`mlock` + zeroize-on-drop `SecretBytes`, cross-chunk `StreamingScrubber` | Win32 / POSIX FFI |
+| `wardline-sandbox` | C-ABI v1 FFI wrapper linking the Zig kernel engine selected by target `(OS, Arch, ABI)`, surfacing `HostCapabilitiesRaw` (`os_kind`, `arm64_ext_flags`, `page_size`) | Zig FFI |
+| `wardline-egress` | SSRF-immune HTTP(S) proxy dialer (`localhost`/`RFC1918`/`CGNAT`/`IMDS`/`*.local`/`*.internal` denied, single pinned DNS lookup into TLS connector), vault header injection, bounded streaming response scrubber | `#![forbid(unsafe_code)]` |
+| `wardline-guard` | Trusted daemon coordinator: hardened IPC listener (Win32 Named Pipe `PIPE_TYPE_BYTE` + SDDL / Unix UDS `0600` + `SO_PEERCRED`), CRL (`crl.redb`), WAL, `file_broker` (reparse/symlink walk), child dispatch | Win32 / POSIX FFI |
+| `wardline-mcp` | Stateless stdio MCP JSON-RPC `2024-11-05` server exposing `wardline_exec`, `wardline_fetch`, `wardline_fs_read`, `wardline_fs_write`, `wardline_learn` | `#![forbid(unsafe_code)]` |
+| `wardline-verify` | Independent zero-trust offline CLI verifier recomputing every BLAKE3 chain link and Ed25519 checkpoint in `audit.wlog` | `#![forbid(unsafe_code)]` |
+| `wardline-cli` | Operator & admin CLI (`run`, `fetch`, `doctor`, `policy`, `cert`, `vault`, `approve`, `audit`) | Safe CLI orchestrator |
 
-## 1. Five-Zone Architecture Overview
+## 2. Zig Kernel Engines & C-ABI v1 (`platforms/`)
 
-Wardline's control plane (Zones 1, 2, 3, and 5) enforces identical zero-trust boundaries across architectures, while Zone 4 swaps in [`platforms/win-arm64/engine_arm64.zig`](../platforms/win-arm64/engine_arm64.zig) (`wardline_engine_arm64`) plus [`tools/wl-arm64-{cc,link}.{cmd,py}`](../tools/wl-arm64-link.py) toolchain integration.
+Every OS and architecture shares the single binary C-ABI defined in [`platforms/common/wardline_abi.h`](../platforms/common/wardline_abi.h) and [`platforms/common/common.zig`](../platforms/common/common.zig):
 
-- **Zone 1 (Caller & Protocol Adapter Plane)**: Hosts `wardline.exe`, `WardlineClient` (Python/TypeScript), and `#![forbid(unsafe_code)]` `wardline-mcp.exe` (`2024-11-05`) forwarding requests over length-prefixed `[u32 LE <= 16 MiB][JSON]` Named Pipe IPC (`\\.\pipe\wardline_guard`).
-- **Zone 2 (`wardline-guard.exe` TCB)**: Runs Ed25519 `WardCertChain` + `crl.redb` checks → policy / 25 LOLBins / 19 scripts / namespace, drive-relative & ADS shields → `approvals.redb` payload-bound `BLAKE3` ticket verification → dispatch to Zone 4 (`wl_spawn_isolated`), `file_broker.rs` (reparse-safe NTFS), or DPAPI/`ChaCha20Poly1305` `wardline-vault` → `StreamingScrubber` → `LockFileEx` `WLG1` audit WAL.
-- **Zone 3 (`wardline-egress`)**: Enforces `Blocked | ProxyOnly | DirectAllowed`, host/IP blocklists (`localhost`, `.local`, `.internal`, `metadata.google.internal`, loopback, RFC1918, `169.254.0.0/16` IMDS, `100.64.0.0/10`, `::ffff:`, IPv6 off by default), single-lookup DNS pinning (`resolve_and_pin_addresses`), Windows Schannel TLS (`connect_pinned`), and post-response scrubbing.
-- **Zone 4 (`engine_arm64.zig` + `sandbox_core.zig`)**: Multi-ISA preflight (`0xAA64` / `0xA641` / `0x8664` Prism), hardware PAC/BTI telemetry (`checkArm64PacBti()`), Win32 process mitigations (`word0`), L0 Restricted Token / L1 zero-network AppContainer creation (`CREATE_SUSPENDED`, `lpDesktop = ""`, `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), `JobObject` + IOCP reaping, and deferred cleanup. *(L2 probes `computecore.dll` and fails closed today.)*
-- **Zone 5 (`.wardline/` & `wardline-verify.exe`)**: Durable vault, approvals, CRL, chained `audit.wlog`, and standalone offline cryptographic verification.
+- `wl_engine_abi_version() -> u32`
+- `wl_engine_arch() -> u32`
+- `wl_classify_pe(bytes_ptr, bytes_len) -> u32`
+- `wl_probe_capabilities(out_caps: *WlHostCapabilities) -> u32`
+- `wl_spawn_isolated(req, io, res) -> u32`
+- `wl_create_hardened_pipe(...)` (Windows only; returns `not_supported_arch` on POSIX where UDS is managed natively)
+- `wl_set_owner_only_dacl_utf8(...)` (Windows DACL / POSIX `0700`/`0600` mode)
+- `wl_harden_current_process_dacl(...)` (Windows `PROTECTED_DACL_SECURITY_INFORMATION` / Linux `PR_SET_DUMPABLE=0`)
 
----
+`WlHostCapabilities` cleanly carries:
+- `os_kind`: `WlOsKind` (`1=windows`, `2=linux`, `3=macos`, `4=freebsd`)
+- `arm64_ext_flags`: bitmask (`WL_ARM64_FEAT_PAC`, `BTI`, `MTE`, `SVE`, `SVE2`, `LARGE_PAGES`)
+- `pac_bti_available`, `cet_shadow_stack_supported`, `hyperv_hcs_available`, `appcontainer_supported`, `job_object_iocp_supported`, `is_wow64_emulated`, `os_build_number`, `page_size`
 
-## 2. ARM64 Kernel Engine Internals (`engine_arm64.zig`)
+### Engine Targets (`build.zig`)
+- `platforms/win-arm64/engine_arm64.zig` + `sandbox_core.zig` (`aarch64-windows-gnu` / `aarch64-windows-msvc`)
+- `platforms/linux/engine_linux.zig` + `posix_sandbox.zig` (`aarch64-linux-gnu` / `aarch64-linux-musl` / `x86_64-linux-*`)
+- `platforms/macos/engine_macos.zig` + `posix_sandbox.zig` (`aarch64-macos` / `x86_64-macos`)
+- `platforms/bsd/engine_bsd.zig` + `posix_sandbox.zig` (`aarch64-freebsd` / `x86_64-freebsd`)
 
-### Multi-ISA Decision Function: `evaluateArm64SpawnPolicy()`
+All four engines can be cross-compiled with zero external SDK dependencies via `zig build all-engines`. When Rust is compiled on a host without Zig installed (or in minimal CI containers), `WARDLINE_PREBUILT_ENGINE_DIR` points `crates/wardline-sandbox/build.rs` to the directory containing the prebuilt `.a`/`.lib` static engine archive.
 
-Before invoking `sandbox.executeIsolatedChild()`, `wl_spawn_isolated` classifies the target PE on disk via `inspectExecutablePeOnDisk()` and feeds it to `evaluateArm64SpawnPolicy(pe_class, allow_arm64ec, allow_prism_x64, req_acg)`:
+## 3. IPC & Trust Boundaries
 
-| `WlPeClass` | Condition | Resulting `WlStatusCode` | `emulation` | `apply_acg` | Rationale |
-| :--- | :--- | :--- | :---: | :---: | :--- |
-| `.arm64` (`0xAA64`) | Always | `ok` (`0`) | `false` | `req_acg` | Native AArch64 instruction stream; supports strict ACG (`MITIGATION_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON`). |
-| `.arm64ec` (`0xA641`) | `allow_arm64ec == true` | `ok` (`0`) | `false` | `req_acg` | ABI-compatible hybrid ARM64EC module allowed by explicit opt-in. |
-| `.arm64ec` (`0xA641`) | `allow_arm64ec == false` | `pe_disallowed_arch` (`4`) | `false` | `false` | Rejected under strict native policy. |
-| `.amd64` (`0x8664`) | `allow_prism_x64 == true` | `ok` (`0`) | **`true`** | **`false`** | Permitted under Prism emulation; ACG is intentionally suppressed to prevent Prism JIT faults (`STATUS_DYNAMIC_CODE_BLOCKED`), and telemetry marks `emulation_detected = 1`. |
-| `.amd64` (`0x8664`) | `allow_prism_x64 == false` | `prism_blocked` (`5`, `WL_ERR_PRISM_BLOCKED`) | `true` | `false` | Default-deny prevents transparent emulation bypasses. |
-| `.x86` / `.script_or_raw` / `.unknown` | Always | `pe_disallowed_arch` (`4`) | `false` | `false` | Blocks 32-bit x86 and raw scripts outright. |
-
-### ARM64 Process Mitigation Mask (`word0`)
-
-Applied on every isolated ARM64 child (`engine_arm64.zig` lines 140–151):
-- `MITIGATION_DEP_ENABLE`
-- `MITIGATION_FORCE_RELOCATE_IMAGES_ALWAYS_ON`
-- `MITIGATION_HEAP_TERMINATE_ALWAYS_ON`
-- `MITIGATION_BOTTOM_UP_ASLR_ALWAYS_ON`
-- `MITIGATION_HIGH_ENTROPY_ASLR_ALWAYS_ON`
-- `MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON`
-- `MITIGATION_FONT_DISABLE_ALWAYS_ON`
-- `MITIGATION_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON` *(only when `eval.apply_acg == true`)*
-
-*(Note: `MITIGATION_SEHOP_ENABLE` is specific to x86/x64 SEH chains and is omitted on ARM64; hardware PAC/BTI support is probed via `checkArm64PacBti()` using `PF_ARM_V83_JSCVT_INSTRUCTIONS_AVAILABLE` and `ProcessUserPointerAuthPolicy`.)*
-
----
-
-## 3. Zig Toolchain Integration (`tools/wl-arm64-*.cmd`)
-
-Rust's Tier-2/Tier-3 `aarch64-pc-windows-gnullvm` target normally expects external `llvm-mingw` tools on Windows. `wardline-arm64` eliminates external MinGW requirements cleanly using [`tools/wl-arm64-cc.py`](../tools/wl-arm64-cc.py) and [`tools/wl-arm64-link.py`](../tools/wl-arm64-link.py):
-- Compiles C dependencies via `zig cc -target aarch64-windows-gnu`.
-- Rewrites `@*.rsp` linker response files and direct flags:
-  - Removes `-nolibc` / `-nostartfiles` where needed by Zig's driver
-  - Inserts `-lunwind` before dynamic objects
-  - Maps `-lmsvcrt` → `-lucrtbase` and `-lsynchronization` → `-lapi-ms-win-core-synch-l1-2-0`
-  - Brackets `-lwindows.*` import crates cleanly with `-Wl,-Bstatic ... -Wl,-Bdynamic`
-- Produces compliant `0xAA64` (`IMAGE_FILE_MACHINE_ARM64`) Windows executables without relying on MSVC x64 cross-linkers for GNU Rust codegen.
-
----
-
-## 4. C-ABI v1 Interface & `unsafe` Boundary
-
-Identical C-ABI v1 contract (`wardline_abi.h`) and Rust `#![forbid(unsafe_code)]` split as `win-x64`: pure Rust across policy, certs, approvals, SSRF, MCP, offline verification, CLI, scrubbing, and guard orchestration; localized `windows-sys` FFI in `dpapi.rs`, `acl.rs`, `lock.rs`, `file_broker.rs`, `pipe_server.rs`, and `wardline-sandbox/src/lib.rs`; Zig native Win32 containment in `sandbox_core.zig` and `engine_arm64.zig`.
+1. **Untrusted Edge -> Guard**: Frames are length-prefixed `[u32 LE length <= 16 MiB][UTF-8 JSON]`.
+   - Windows uses `\\.\pipe\wardline_guard` (overlapped byte stream pipe, `PIPE_REJECT_REMOTE_CLIENTS`, restricted SDDL).
+   - Unix uses `$WARDLINE_SOCKET` or `$XDG_RUNTIME_DIR/wardline_guard.sock` (`0600`, peer UID verified via `SO_PEERCRED`/`LOCAL_PEERCRED`).
+2. **Guard -> Child Process**: `env_clear()` strips ambient secrets; only allowlisted environment variables and granted `secret` injections are passed into the suspended/forked child; `HANDLE_LIST` (Windows) or `FD` close loop (POSIX) ensures zero leaked file descriptors.
+3. **Child Output / Egress Response -> Caller**: All captured stdout/stderr and HTTP responses stream through `StreamingScrubber` before reaching any client or MCP host.

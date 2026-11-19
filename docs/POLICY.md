@@ -1,100 +1,63 @@
-# Wardline (`win-arm64`) — Policy Manifest & WardCert Reference
+# Wardline Policy Schema v1 Reference
 
-Wardline enforces two authorization boundaries: the host's declarative TOML v1 manifest ([`schemas/wardline.v1.toml`](../schemas/wardline.v1.toml)) and dynamic **Ed25519 `WardCertChain`** capability tokens (`--arch arm64`).
+Wardline policies are declarative TOML manifests compiled by `wardline-policy` (`schemas/wardline.v1.toml`). Anything not explicitly permitted is denied fail-closed.
 
----
-
-## 1. Policy Manifest Schema (`v1`)
+## 1. Execution & Isolation (`[architecture]` & `[execution]`)
 
 ```toml
 version = 1
-name = "default-windows-sandbox"
+name = "arm64-cloud-server"
 
 [architecture]
-# "strict_native"  — allow 0xAA64 (ARM64) only
-# "allow_arm64ec"  — allow 0xAA64 + 0xA641 (ARM64EC)
-# "allow_prism_x64"— allow 0x8664 under Prism emulation (suppresses ACG on emulated child)
-mode = "strict_native"
+mode = "strict_native"               # "strict_native" | "allow_arm64ec" | "allow_prism_x64"
 
 [execution]
-isolation = "L1"
+isolation = "L1"                     # "L0" | "L1" | "L2" (fails closed if L2 unavailable)
 working_dir = "."
 inherit_env = false
-allowed_env = ["PATH", "SystemRoot", "TEMP", "TMP"]
-deny_scripts = true
-deny_lolbins = true
-timeout_ms = 30000
-max_memory_mb = 512
-max_processes = 16
-cpu_rate_percent = 50
+allowed_env = ["PATH", "HOME", "LANG", "LC_ALL"]
+deny_scripts = true                  # Blocks 19 Win + 14 Unix script extensions
+deny_lolbins = true                  # Blocks 25 Win + 34 Unix LOLBins
+timeout_ms = 60000
+max_memory_mb = 2048
+max_processes = 32
+cpu_rate_percent = 80
 acg = true
-cet_shadow_stack = true
-
-[filesystem]
-workspace_read = ["."]
-workspace_write = []
-denied_prefixes = [
-    "C:\\Windows\\System32\\config",
-    "\\\\?\\",
-    "\\\\",
-]
-
-[network]
-egress_mode = "proxy_only"
-allow_ipv6 = false
-allow_private_ips = false
-allow_metadata_ips = false
-allowed_destinations = [
-    "https://api.github.com/**",
-]
-
-[credentials]
-allowed_grants = []
-max_bytes_per_request = 1048576
-
-[approvals]
-require_on_write = true
-require_on_network_post = true
-default_ttl_secs = 300
-
-[audit]
-log_path = ".wardline/audit.wlog"
-lock_mode = "exclusive_blocking"
-seal_interval_events = 64
+cet_shadow_stack = false
 ```
 
-### Key `win-arm64` Behavioral Notes
+### Architecture Policies (`[architecture].mode`)
+- **`strict_native`** (default):
+  - Windows ARM64: allows `0xAA64` (`PE`) only.
+  - Linux ARM64: allows native `AArch64` ELF only (rejects binfmt x64 translation and non-ELF images).
+  - macOS Apple Silicon: allows `ARM64` native Mach-O or Universal Fat binary containing an `ARM64` slice.
+  - FreeBSD ARM64: allows native `EM_AARCH64` ELF.
+  - x64 hosts: allows native `0x8664` PE / `EM_X86_64` ELF / `X86_64` Mach-O only.
+- **`allow_arm64ec`**: Windows ARM64 opt-in permitting `0xA641` ARM64EC binaries with native ACG enabled.
+- **`allow_prism_x64`**: Opt-in permitting x64 emulation on ARM64 hosts (Prism on Windows with ACG automatically suppressed to avoid JIT `STATUS_DYNAMIC_CODE_BLOCKED`, Rosetta 2 on macOS, or qemu-user/binfmt on Linux).
 
-- **`[architecture].mode`**:
-  - `"strict_native"` (recommended): rejects `ARM64EC` (`0xA641`, `WL_ERR_PE_DISALLOWED_ARCH`) and `AMD64` (`0x8664`, `WL_ERR_PRISM_BLOCKED`).
-  - `"allow_arm64ec"`: permits `0xAA64` + `0xA641` with ACG still active.
-  - `"allow_prism_x64"`: permits `0x8664` under Prism emulation while automatically suppressing ACG (`PROHIBIT_DYNAMIC_CODE_ALWAYS_ON`) on emulated child processes so Prism JIT code pages do not fault (`STATUS_DYNAMIC_CODE_BLOCKED`).
-- **`[execution].cet_shadow_stack`**: Schema field shared across v1 manifests; ignored/reported as unsupported on ARM64 where `cet_shadow_stack_supported = 0`. Use `wardline doctor --json` to inspect `pac_bti_available` instead.
-- **`[execution].deny_lolbins` & `deny_scripts`**: Blocks 25 Windows LOLBins (50 binary/bare patterns) and 19 script extensions regardless of host ISA.
-- **`[filesystem]`, `[network]`, `[credentials]`, `[approvals]`, `[audit]`**: Enforced identically to `win-x64` inside `wardline-guard.exe`.
+### Isolation Tiers
+- **`L0`**: Restricted token + Low integrity (Windows) or `PR_SET_NO_NEW_PRIVS` + closed FDs + `rlimit` (POSIX).
+- **`L1`** (default):
+  - Windows: `AppContainer` (zero network capabilities) + Hardened `JobObject` + `CREATE_SUSPENDED` + `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` + Win32 process mitigations + IOCP reaper.
+  - Linux: `UserNS` + `NetNS` + `IPC` + `UTS` + `PR_SET_NO_NEW_PRIVS` + Landlock filesystem ruleset + seccomp-BPF syscall/socket filter.
+  - macOS: Seatbelt SBPL default-deny profile with scoped filesystem reads/writes and network disabled.
+  - FreeBSD: Capsicum `cap_enter()` capability mode + `fexecve()`.
+- **`L2`**: Hardware microVM probe (`Hyper-V HCS` / Linux `/dev/kvm`); currently fails closed if requested until the MicroVM driver tier is activated.
 
----
+## 2. Filesystem, Egress, Vault & Device Profiles
 
-## 2. `WardCert` Capability Scopes & Monotonic Attenuation
+See [`schemas/wardline.v1.toml`](../schemas/wardline.v1.toml) and ready-to-deploy device-class templates in [`schemas/profiles/`](../schemas/profiles/):
+- `arm64-laptop.toml` — Copilot+ / Apple Silicon developer workstation profile
+- `arm64-server.toml` — Neoverse / Graviton / Ampere / Grace cloud runner profile
+- `arm64-edge-sbc.toml` — Tight memory/process-capped ARM64 SBC / robotics gateway profile
+- `x64-workstation.toml` — Developer workstation x64 profile
+- `x64-server.toml` — Hardened x64 Linux/Windows server runner profile
 
-Scopes use identical prefix syntax:
-- `fs-read:<path>`
-- `fs-write:<path>`
-- `fs-delete:<path>`
-- `exec:<binary>`
-- `net:<host>[:/path]`
-- `vault:<grant_id>`
+## 3. Built-In Anti-LOLBin & Path Shield
 
-When issuing or delegating certs for ARM64 hosts, pass `--arch arm64` so certificates cannot drift across processor architectures, and `validate_monotonic_attenuation()` guarantees child chains strictly narrow or preserve expiry, isolation tier (`l0`/`l1`/`l2`), arch constraint, depth, and scope sets.
-
----
-
-## 3. Dry-Run Policy Evaluation Commands
-
-```powershell
-$cli = ".\target\aarch64-pc-windows-gnullvm\release\wardline.exe"
-
-$cli policy validate .\schemas\wardline.v1.toml --json
-$cli policy eval-fs --policy .\schemas\wardline.v1.toml src\main.rs
-$cli policy eval-net --policy .\schemas\wardline.v1.toml https://api.github.com/zen
-```
+- **Windows LOLBins blocked (25 executables / 50 patterns)**: `cmd`, `powershell`, `pwsh`, `wscript`, `cscript`, `mshta`, `rundll32`, `regsvr32`, `certutil`, `bitsadmin`, `wmic`, `msiexec`, `installutil`, `msbuild`, `wsl`, `bash`, `reg`, `sc`, `schtasks`, `forfiles`, `pcalua`, `syncappvpublishingserver`, `control`, `cmstp`, `odbcconf` (and native `.exe` / System32/SysWOW64/Sysnative variants).
+- **Windows script extensions blocked (19)**: `.bat`, `.cmd`, `.ps1`, `.psm1`, `.psd1`, `.vbs`, `.vbe`, `.js`, `.jse`, `.wsf`, `.wsh`, `.hta`, `.sct`, `.scr`, `.pif`, `.lnk`, `.inf`, `.reg`, `.msc`.
+- **Unix LOLBins blocked (34)**: `sh`, `dash`, `bash`, `zsh`, `ksh`, `csh`, `tcsh`, `fish`, `ash`, `busybox`, `curl`, `wget`, `fetch`, `nc`, `ncat`, `netcat`, `socat`, `telnet`, `ssh`, `scp`, `sftp`, `rsync`, `python`, `python2`, `python3`, `perl`, `ruby`, `php`, `lua`, `awk`, `gawk`, `nawk`, `mawk`, `osascript`.
+- **Unix script extensions blocked (14)**: `.sh`, `.bash`, `.zsh`, `.ksh`, `.csh`, `.fish`, `.command`, `.py`, `.pl`, `.rb`, `.php`, `.lua`, `.scpt`, `.applescript`.
+- **Path normalization (`path.rs`)**: Rejects `..` parent escapes, NUL bytes, NT device prefixes (`\\?\`, `\\.\`, `\??\`), UNC shares, and NTFS Alternate Data Streams (`:`).
