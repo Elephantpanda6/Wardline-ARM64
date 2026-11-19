@@ -12,7 +12,7 @@ jobs:
   clippy-and-invariants:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04-arm, windows-11-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.1
+      - name: Install Linux OpenSSL headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - name: Zig tests & engine build
         run: |
           zig build common-tests

@@ -68,3 +68,15 @@ Compiled standalone `ELF64 AArch64` (`aarch64-linux-musl`) Zig test binaries and
 | **Python SDK** (`clients/python`) | **1/1 passed** (`unittest`) | **1/1 passed** (`unittest`) | `[u32 LE][JSON]` framing & exit-code `3` error classes |
 | **TypeScript SDK** (`clients/ts`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | Verified Node v24 direct TypeScript execution on both OSes |
 | **Go SDK** (`clients/go/wardline`) | **1/1 passed** (`go1.27.4 windows/amd64`) | **1/1 passed** (`go1.26.8 linux/amd64`) | `TestIPCFrameAndCheckedResponse` passed on both OSes |
+
+---
+
+## 6. Multi-OS ARM64 GitHub Actions CI & Supply-Chain Verification
+
+- **Supply-Chain Audit (`supply-chain`: `cargo-deny` + `rustsec/audit-check`)**: **Passed** (`advisories ok`, `bans ok`, `licenses ok`, `sources ok`).
+- **Native & Cross ARM64 Matrices (`Wardline ARM64 Multi-OS CI`)**: **Passed** across all 5 runners:
+  - `Windows 11 ARM64 Native Test Suite` (`windows-11-arm`): native `PE 0xAA64` Zig + full live workspace + `live_sandbox` + `invariants_i1_i7`
+  - `Linux ARM64 Native Build & Test` (`ubuntu-24.04-arm`): native `AArch64` ELF Zig + full workspace + `live_sandbox` + `invariants_i1_i7`
+  - `macOS Apple Silicon Native Build & Test` (`macos-latest`): native Apple Silicon `ARM64` Seatbelt + `live_sandbox` + `invariants_i1_i7`
+  - `Windows ARM64 Cross-Build & Clippy` (`windows-latest` -> `aarch64-pc-windows-msvc` / `aarch64-pc-windows-gnullvm`)
+  - `Zig 4-OS ARM64 Engine Cross-Build` (`win-arm64`, `linux-arm64`, `macos-arm64`, `freebsd-arm64`)

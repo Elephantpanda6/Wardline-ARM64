@@ -10,12 +10,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: wardline-windows-x64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: wardline-linux-x64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: wardline-windows-arm64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: wardline-linux-arm64
@@ -31,6 +28,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.1
+      - name: Install Linux OpenSSL headers
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - name: Build Zig engines
         run: zig build all-engines
       - name: Build release binaries
