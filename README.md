@@ -1,6 +1,6 @@
 # Wardline (ARM64 / Cross-OS Edition)
 
-> **Fail-closed capability boundary, host-sealed secret vault, anti-SSRF egress broker, OS-native ARM64 process sandbox, and tamper-evident audit ledger for autonomous agents across Windows on ARM (`0xAA64`), Linux `aarch64`, macOS Apple Silicon, and FreeBSD `arm64`.**
+> **Multi-OS Zero-Trust Capability Broker, Host-Sealed Secret Vault, Anti-SSRF Egress Proxy, Native ARM64 Kernel Process Sandbox (`L0`–`L2`, `C-ABI v2`), and Merkle Audit Runtime across Windows on ARM (`0xAA64`), Linux `aarch64`, Apple Silicon macOS, and FreeBSD `arm64`.**
 
 [![Rust Workspace](https://img.shields.io/badge/Rust-14%20crates%20(12%2B1%20forbid%20unsafe)-orange)](#architecture-summary)
 [![Zig ARM64 Engines](https://img.shields.io/badge/Zig-4%20ARM64%20Engines%20(C--ABI%20v2)-f7a41d)](#cross-os-arm64-platform-matrix)
