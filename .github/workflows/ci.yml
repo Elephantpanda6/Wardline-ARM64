@@ -14,7 +14,7 @@ jobs:
     name: Zig 4-OS ARM64 Engine Cross-Build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.1
@@ -27,7 +27,7 @@ jobs:
     name: Windows ARM64 Cross-Build & Clippy
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-pc-windows-msvc,aarch64-pc-windows-gnullvm
@@ -51,7 +51,7 @@ jobs:
     name: Windows 11 ARM64 Native Test Suite
     runs-on: windows-11-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -74,7 +74,7 @@ jobs:
     name: Linux ARM64 Native Build & Test
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -93,7 +93,7 @@ jobs:
     name: macOS Apple Silicon Native Build & Test
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
